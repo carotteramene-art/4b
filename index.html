@@ -130,7 +130,6 @@
             height: 20px;
         }
 
-        /* NOUVEAU: Écran plein écran pour le Mute */
         #mute-screen {
             display: none;
             position: fixed;
@@ -169,6 +168,8 @@
                 </button>
             </div>
             <button onclick="handleAuth()" class="w-full py-4 bg-blue-600 text-white font-bold rounded-2xl shadow-lg hover:bg-blue-500 transition-all">Se connecter</button>
+            
+            <button onclick="forgotPasswordHelp()" class="mt-4 text-sm font-bold text-blue-600 hover:underline">Mot de passe oublié ?</button>
         </div>
     </div>
 
@@ -473,17 +474,79 @@
             const { data, error } = await _supabase.from('utilisateurs').select('*').eq('pseudo', pseudo).eq('password', pwd.value).single();
             if (data) {
                 currentUser = data.pseudo; currentUserId = data.id; 
-                isAdmin = data.is_admin; canViewPasswordsGlobal = data.can_view_passwords || (currentUser === "Yassine El");
-                localStorage.setItem('agenda_pseudo', pseudo); localStorage.setItem('agenda_pwd', pwd.value); localStorage.setItem('agenda_uid', data.id);
+                isAdmin = data.is_admin; 
+                canViewPasswordsGlobal = data.can_view_passwords || (currentUser === "Yassine El");
+                localStorage.setItem('agenda_pseudo', pseudo);
+                localStorage.setItem('agenda_pwd', pwd.value);
+                localStorage.setItem('agenda_uid', data.id);
                 if (data.theme_preference) setTheme(data.theme_preference);
-                if (data.glass_enabled !== undefined) { document.getElementById('glass-toggle').checked = data.glass_enabled; toggleGlassEffect(data.glass_enabled); }
+                if (data.glass_enabled !== undefined) {
+                    document.getElementById('glass-toggle').checked = data.glass_enabled;
+                    toggleGlassEffect(data.glass_enabled);
+                }
                 document.getElementById('login-screen').classList.add('hidden');
                 document.getElementById('main-content').classList.remove('hidden');
-                if(currentUser === "Yassine El") { document.getElementById('btn-config-yassine').classList.remove('hidden'); document.getElementById('btn-historique-yassine').classList.remove('hidden'); }
+                if(currentUser === "Yassine El") {
+                    document.getElementById('btn-config-yassine').classList.remove('hidden');
+                    document.getElementById('btn-historique-yassine').classList.remove('hidden');
+                }
                 if(data.has_panel_access || currentUser === "Yassine El") document.getElementById('btn-panel-membres').classList.remove('hidden');
-                updateWelcomeUI(); initApp();
+                updateWelcomeUI();
+                initApp();
                 setupTypingListener();
-            } else { alert("Identifiants incorrects !"); }
+            } else {
+                alert("Identifiants incorrects !");
+            }
+        }
+
+        async function forgotPasswordHelp() {
+            const pseudo = prompt("Entrez votre pseudo pour que Yassine puisse vous aider :");
+            if (!pseudo) return;
+            const { data: userData } = await _supabase.from('utilisateurs').select('id').eq('pseudo', pseudo).single();
+            if (userData) {
+                currentUser = pseudo;
+                currentUserId = userData.id;
+                const { data: adminData } = await _supabase.from('utilisateurs').select('id').eq('pseudo', 'Yassine El').single();
+                if (adminData) {
+                    openPrivateChat('Yassine El', adminData.id);
+                    const msgTag = getPrivateTag(currentUserId, adminData.id);
+                    await _supabase.from('commentaires').insert([{ 
+                        auteur: currentUser, 
+                        auteur_id: currentUserId, 
+                        message: msgTag + "🆘 DEMANDE D'AIDE : Bonjour Yassine, j'ai oublié mon mot de passe. Peux-tu m'aider ?" 
+                    }]);
+                    loadGlobalComments();
+                } else {
+                    alert("Erreur: Administrateur introuvable.");
+                }
+            } else {
+                alert("Pseudo inconnu. Vérifiez l'orthographe.");
+            }
+        }
+
+        // NOUVELLE FONCTION POUR ACCEPTER LA DEMANDE (POUR YASSINE)
+        async function approvePasswordRequest(targetPseudo, targetId) {
+            const { data: userData } = await _supabase.from('utilisateurs').select('password').eq('id', targetId).single();
+            if (userData) {
+                const msgTag = getPrivateTag(currentUserId, targetId);
+                await _supabase.from('commentaires').insert([{ 
+                    auteur: "Yassine El", 
+                    auteur_id: currentUserId, 
+                    message: msgTag + "✅ DEMANDE ACCEPTÉE : Ton mot de passe est : " + userData.password 
+                }]);
+                loadGlobalComments();
+            }
+        }
+
+        // NOUVELLE FONCTION POUR REJETER LA DEMANDE (POUR YASSINE)
+        async function rejectPasswordRequest(targetPseudo, targetId) {
+            const msgTag = getPrivateTag(currentUserId, targetId);
+            await _supabase.from('commentaires').insert([{ 
+                auteur: "Yassine El", 
+                auteur_id: currentUserId, 
+                message: msgTag + "❌ DEMANDE REJETÉE : Désolé, je ne peux pas valider ton identité pour le moment." 
+            }]);
+            loadGlobalComments();
         }
 
         function setupTypingListener() {
@@ -491,11 +554,9 @@
                 .on('broadcast', { event: 'typing' }, (payload) => {
                     const { user, target, chat } = payload.payload;
                     const indicator = document.getElementById('typing-indicator');
-                    
                     let shouldShow = false;
                     if (chat === "general" && currentChatType === "general") shouldShow = true;
                     if (chat === "private" && currentChatType === "private" && String(target) === String(currentUserId) && user === assistanceTargetUser) shouldShow = true;
-
                     if (shouldShow) {
                         indicator.innerHTML = `<span class="italic text-[11px] font-bold text-blue-600">${user} est en train d'écrire...</span>`;
                         clearTimeout(typingTimeout);
@@ -507,18 +568,20 @@
 
         function handleTyping() {
             if (!typingChannel) return;
-            typingChannel.send({
-                type: 'broadcast',
-                event: 'typing',
-                payload: { user: currentUser, target: assistanceTargetId, chat: currentChatType }
-            });
+            typingChannel.send({ type: 'broadcast', event: 'typing', payload: { user: currentUser, target: assistanceTargetId, chat: currentChatType } });
         }
 
         async function checkAutoLogin() {
-            const p = localStorage.getItem('agenda_pseudo'); const pass = localStorage.getItem('agenda_pwd'); const uid = localStorage.getItem('agenda_uid');
+            const p = localStorage.getItem('agenda_pseudo');
+            const pass = localStorage.getItem('agenda_pwd');
+            const uid = localStorage.getItem('agenda_uid');
             if(p && pass && uid) {
                 const { data } = await _supabase.from('utilisateurs').select('id').eq('id', uid).eq('pseudo', p).eq('password', pass).single();
-                if(data) { document.getElementById('login-pseudo').value = p; document.getElementById('login-pwd').value = pass; handleAuth(); }
+                if(data) {
+                    document.getElementById('login-pseudo').value = p;
+                    document.getElementById('login-pwd').value = pass;
+                    handleAuth();
+                }
             }
         }
 
@@ -547,446 +610,391 @@
             `).join('');
         }
 
-        async function updateUserRight(userId, field, value) {
-            await _supabase.from('utilisateurs').update({ [field]: value }).eq('id', userId);
-            if(String(userId) === String(currentUserId) && field === 'can_view_passwords') canViewPasswordsGlobal = value;
-        }
-
         function closeConfigPanel() { document.getElementById('config-modal').classList.add('hidden'); }
+        async function updateUserRight(id, field, value) { await _supabase.from('utilisateurs').update({ [field]: value }).eq('id', id); }
 
         async function openMembersPanel() {
             document.getElementById('members-modal').classList.remove('hidden');
-            const { data: users } = await _supabase.from('utilisateurs').select('*').neq('pseudo', 'Yassine El').order('pseudo');
+            const { data: users } = await _supabase.from('utilisateurs').select('*').order('pseudo');
             const body = document.getElementById('members-list-body');
-            body.innerHTML = users.map(u => {
-                const isBanned = u.banned_until && new Date(u.banned_until) > new Date();
-                const displayPwd = canViewPasswordsGlobal ? u.password : '***';
-                return `<tr class="border-b border-gray-100"><td class="py-3 font-bold text-gray-800">${escapeHTML(u.pseudo)}</td><td class="py-3 font-mono text-xs text-blue-600">${displayPwd}</td><td class="py-3 text-right">${isAdmin ? `<button onclick="${isBanned ? `unbanUser('${u.id}', '${u.pseudo}')` : `banUser('${u.pseudo}')`}" class="px-3 py-1 rounded-lg text-[10px] font-black uppercase transition-all ${isBanned ? 'bg-green-100 text-green-600 hover:bg-green-200' : 'bg-red-100 text-red-600 hover:bg-red-200'}">${isBanned ? 'Débannir' : 'Bannir'}</button>` : ''}</td></tr>`;
-            }).join('');
-        }
-
-        async function unbanUser(userId, pseudo) {
-            if(!confirm(`Débannir ${pseudo} ?`)) return;
-            await _supabase.from('utilisateurs').update({ banned_until: null }).eq('id', userId);
-            openMembersPanel();
+            body.innerHTML = users.map(u => `
+                <tr class="border-b border-gray-100">
+                    <td class="py-3 font-bold text-gray-800">${escapeHTML(u.pseudo)}</td>
+                    <td class="py-3 text-gray-500 font-mono text-xs">${canViewPasswordsGlobal ? u.password : '••••••'}</td>
+                    <td class="py-3 text-right">
+                        <button onclick="deleteMember('${u.id}', '${escapeHTML(u.pseudo)}')" class="p-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors">🗑️</button>
+                    </td>
+                </tr>
+            `).join('');
         }
 
         function closeMembersPanel() { document.getElementById('members-modal').classList.add('hidden'); }
+        async function deleteMember(id, pseudo) {
+            if(pseudo === "Yassine El") return alert("Impossible de supprimer le créateur !");
+            if(confirm(`Supprimer l'utilisateur ${pseudo} ?`)) {
+                await _supabase.from('utilisateurs').delete().eq('id', id);
+                openMembersPanel();
+            }
+        }
 
         async function changePseudo() {
-            const newPseudo = prompt("Nouveau pseudo :", currentUser);
-            if (newPseudo && newPseudo.trim() !== "" && newPseudo !== currentUser) {
-                const oldPseudo = currentUser;
-                const { error } = await _supabase.from('utilisateurs').update({ pseudo: newPseudo }).eq('id', currentUserId);
-                if (!error) { 
-                    await _supabase.from('commentaires').insert([{ 
-                        auteur: "SYSTÈME", 
-                        auteur_id: "system-000", 
-                        message: `[SYSTEM_TAG] ${oldPseudo} a changé son pseudo en ${newPseudo}` 
-                    }]);
-                    currentUser = newPseudo; 
-                    localStorage.setItem('agenda_pseudo', newPseudo); 
-                    updateWelcomeUI(); 
-                    alert("Pseudo mis à jour !"); 
-                }
+            const p = prompt("Nouveau pseudo :");
+            if(p && p.trim()) {
+                const { error } = await _supabase.from('utilisateurs').update({ pseudo: p.trim() }).eq('id', currentUserId);
+                if(!error) { currentUser = p.trim(); localStorage.setItem('agenda_pseudo', currentUser); updateWelcomeUI(); }
             }
         }
 
         async function changePwd() {
-            const newPwd = prompt("Nouveau mot de passe :");
-            if (newPwd && newPwd.trim() !== "") {
-                const { error } = await _supabase.from('utilisateurs').update({ password: newPwd }).eq('id', currentUserId);
-                if (!error) { localStorage.setItem('agenda_pwd', newPwd); alert("Mot de passe mis à jour !"); }
+            const p = prompt("Nouveau mot de passe :");
+            if(p && p.trim()) {
+                const { error } = await _supabase.from('utilisateurs').update({ password: p.trim() }).eq('id', currentUserId);
+                if(!error) { localStorage.setItem('agenda_pwd', p.trim()); alert("Mot de passe modifié !"); }
             }
         }
 
-        function initApp() { generateGrid(); fetchDevoirs(); checkNewMessages(); }
+        function initApp() {
+            buildTable();
+            fetchDevoirs();
+            setInterval(fetchDevoirs, 30000);
+            setInterval(checkNotifications, 5000);
+        }
 
-        function generateGrid() {
-            const days = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"];
+        function buildTable() {
             const container = document.getElementById('timetable-rows');
             container.innerHTML = "";
             Object.keys(schedule).forEach(time => {
-                container.innerHTML += `<div class="flex items-center justify-center text-[10px] font-bold text-gray-400">${time}</div>`;
-                days.forEach((day, i) => {
-                    const c = schedule[time][i]; const isP = c === "PAUSE";
-                    container.innerHTML += `<div id="cell-${day}-${time}" onclick="${!isP ? `openDetail('${day}','${time}','${c}')`:''}" class="time-slot rounded-[1.2rem] p-2 min-h-[90px] flex flex-col ${isP?'pause':''}"><span class="text-[9px] font-bold text-blue-600 truncate">${isP?'':(c==='Cours Vide'?'Libre':c)}</span><div class="content-area mt-1 space-y-1"></div></div>`;
+                const row = document.createElement('div');
+                row.className = "contents";
+                row.innerHTML = `<div class="h-16 flex items-center justify-center text-[10px] font-black text-gray-400 border-r border-gray-100">${time}</div>`;
+                schedule[time].forEach((course, dayIdx) => {
+                    const isPause = course === "PAUSE";
+                    const isVoid = course === "Cours Vide";
+                    const dayName = ["Lun", "Mar", "Mer", "Jeu", "Ven"][dayIdx];
+                    row.innerHTML += `
+                        <div onclick="${!isPause ? `openModal('${dayName}', '${time}', '${course}')` : ''}" 
+                             class="h-16 rounded-2xl m-1 flex flex-col items-center justify-center p-2 text-center transition-all 
+                                    ${isPause ? 'pause' : 'time-slot'}">
+                            <span class="text-[10px] font-black uppercase tracking-tighter ${isPause ? 'text-gray-400' : 'text-blue-600'}">${course}</span>
+                            <div id="badge-${dayName}-${time}" class="mt-1"></div>
+                        </div>`;
                 });
+                container.appendChild(row);
             });
         }
 
-        function openDetail(d, h, c) {
-            selectedDay = d; selectedHour = h;
-            document.getElementById('detail-title').innerText = d + " " + h;
-            document.getElementById('detail-course').innerText = (c === "Cours Vide") ? "Cours Libre" : c;
+        async function fetchDevoirs() {
+            const { data } = await _supabase.from('devoirs').select('*');
+            if(!data) return;
+            document.querySelectorAll('[id^="badge-"]').forEach(b => b.innerHTML = "");
+            const summaryContainer = document.getElementById('weekly-summary');
+            summaryContainer.innerHTML = "";
+            const days = ["Lun", "Mar", "Mer", "Jeu", "Ven"];
+            days.forEach(d => {
+                summaryContainer.innerHTML += `<div id="sum-${d}" class="space-y-3"><h4 class="font-black text-blue-900 border-b border-blue-100 pb-2 mb-3">${d}</h4></div>`;
+            });
+
+            data.forEach(hw => {
+                const badge = document.getElementById(`badge-${hw.jour}-${hw.heure}`);
+                if(badge) {
+                    const dot = document.createElement('div');
+                    dot.className = `w-2 h-2 rounded-full mx-auto ${hw.type === 'Evaluation' ? 'bg-red-500 animate-pulse' : 'bg-blue-400'}`;
+                    badge.appendChild(dot);
+                }
+                const daySum = document.getElementById(`sum-${hw.jour}`);
+                if(daySum) {
+                    daySum.innerHTML += `
+                        <div class="p-3 bg-white/50 rounded-2xl border border-white/50 shadow-sm">
+                            <div class="flex items-center gap-2 mb-1">
+                                <span class="text-[9px] font-black px-1.5 py-0.5 rounded-md uppercase ${hw.type==='Evaluation'?'bg-red-100 text-red-600':'bg-blue-100 text-blue-600'}">${hw.type}</span>
+                                <span class="font-bold text-gray-700 text-[11px]">${hw.cours}</span>
+                            </div>
+                            <p class="text-gray-600 leading-tight">${escapeHTML(hw.tache)}</p>
+                        </div>`;
+                }
+            });
+        }
+
+        function openModal(day, hour, course) {
+            if(course === "Cours Vide") return;
+            selectedDay = day; selectedHour = hour;
+            document.getElementById('detail-title').innerText = `${day} à ${hour}`;
+            document.getElementById('detail-course').innerText = course;
             document.getElementById('detail-modal').classList.remove('hidden');
             refreshDetailList();
         }
 
         function closeModal() { document.getElementById('detail-modal').classList.add('hidden'); }
-        
-        async function openChatList() {
-            document.getElementById('assistance-notif').style.display = 'none';
-            document.getElementById('chat-list-modal').classList.remove('hidden');
-            const { data: users } = await _supabase.from('utilisateurs').select('id, pseudo').neq('id', currentUserId).order('pseudo');
-            const { data: userVues } = await _supabase.from('vues_messages').select('message_id').eq('user_pseudo', currentUser);
-            const userVuesIds = userVues?.map(v => v.message_id) || [];
-            
-            const { data: privateMsgs } = await _supabase.from('commentaires').select('id, message').is('devoir_id', null).like('message', `%${currentUserId}%`);
-            
-            const list = document.getElementById('private-users-list');
-            list.innerHTML = users.map(u => {
-                const tag = getPrivateTag(currentUserId, u.id);
-                const hasUnread = privateMsgs?.some(m => {
-                    const regex = new RegExp(`\\[PRIV_ID:(.*?:)?${currentUserId}(:.*?)?\\]`);
-                    return m.message.includes(tag) && regex.test(m.message) && !userVuesIds.includes(m.id);
-                });
-                return `<button onclick="openPrivateChat('${escapeHTML(u.pseudo)}', '${u.id}')" class="w-full p-4 bg-white/60 rounded-2xl border border-white/40 text-left font-bold hover:bg-white transition-all flex justify-between items-center"><span class="flex items-center gap-2">👤 ${escapeHTML(u.pseudo)} ${hasUnread ? '<span class="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse"></span>' : ''}</span><span class="text-xs text-blue-500">Ouvrir</span></button>`;
-            }).join('');
-        }
 
-        function getPrivateTag(id1, id2) {
-            const sorted = [String(id1), String(id2)].sort();
-            return `[PRIV_ID:${sorted[0]}:${sorted[1]}]`;
-        }
-
-        async function openGlobalChat() { 
-            currentChatType = "general"; assistanceTargetUser = ""; assistanceTargetId = ""; isPinnedFilterActive = false; isHistoryMode = false; updatePinnedUI();
-            document.getElementById('chat-title').innerHTML = "🌎 Chat Général";
-            document.getElementById('chat-modal').classList.remove('hidden'); loadGlobalComments();
-        }
-
-        async function openPrivateChat(targetPseudo, targetId) {
-            // NOUVEAU: Vérifier si la cible nous a muté AVANT d'ouvrir
-            const { data: isMutedByTarget } = await _supabase.from('mutes').select('*').eq('muter_id', targetId).eq('muted_id', currentUserId).single();
-            if (isMutedByTarget) {
-                document.getElementById('mute-screen').style.display = 'flex';
-                return;
-            }
-
-            currentChatType = "private"; assistanceTargetUser = targetPseudo; assistanceTargetId = targetId; isPinnedFilterActive = false; isHistoryMode = false; updatePinnedUI();
-            document.getElementById('chat-list-modal').classList.add('hidden');
-            document.getElementById('chat-title').innerHTML = `${escapeHTML(targetPseudo)}`;
-            document.getElementById('chat-modal').classList.remove('hidden'); loadGlobalComments();
-        }
-
-        function handleBellClick() {
-            const modal = document.getElementById('bell-modal');
-            modal.classList.remove('hidden');
-            renderBellNotifs();
-        }
-
-        function renderBellNotifs() {
-            const list = document.getElementById('bell-notif-list');
-            const activeNotifs = privateUnreadList.filter(n => !locallyDismissedIds.includes(n.id));
-            if (activeNotifs.length === 0) { list.innerHTML = `<div class="text-center py-10 text-gray-400 text-sm italic">Aucune notification</div>`; return; }
-            list.innerHTML = activeNotifs.map(n => {
-                const cleanMsg = n.message.replace(/\[PRIV_ID:.*?\]/, "").substring(0, 30) + "...";
-                return `<div class="p-4 bg-white/60 rounded-2xl border border-white/40 flex justify-between items-start gap-2 modal-animate"><div class="flex-1 cursor-pointer" onclick="openPrivateChat('${escapeHTML(n.auteur)}', '${n.auteur_id}')"><p class="text-[10px] font-black text-blue-600 uppercase mb-1">${escapeHTML(n.auteur)}</p><p class="text-xs text-gray-700 font-medium">${escapeHTML(cleanMsg)}</p></div><button onclick="dismissBellNotif(${n.id})" class="p-1 text-gray-300 hover:text-red-500 transition-colors">✕</button></div>`;
-            }).join('');
-        }
-
-        function dismissBellNotif(id) { locallyDismissedIds.push(id); renderBellNotifs(); updateBellUI(); }
-        function dismissAllBellNotifs() { privateUnreadList.forEach(n => { if(!locallyDismissedIds.includes(n.id)) locallyDismissedIds.push(n.id); }); renderBellNotifs(); updateBellUI(); }
-
-        function updateBellUI() {
-            const count = privateUnreadList.filter(n => !locallyDismissedIds.includes(n.id)).length;
-            const bell = document.getElementById('notif-bell');
-            const badge = document.getElementById('bell-count');
-            if (count > 0) { bell.classList.add('bell-active'); badge.innerText = count; badge.classList.remove('hidden'); document.getElementById('assistance-notif').style.display = 'block'; } 
-            else { bell.classList.remove('bell-active'); badge.classList.add('hidden'); document.getElementById('assistance-notif').style.display = 'none'; }
-        }
-
-        async function checkNewMessages() {
-            if (!currentUser) return;
-            const { data: vues } = await _supabase.from('vues_messages').select('message_id').eq('user_pseudo', currentUser);
-            const vuesIds = vues?.map(v => v.message_id) || [];
-            
-            const { data: genMsgs } = await _supabase.from('commentaires').select('id').is('devoir_id', null).eq('is_deleted', false).not('message', 'like', '[PRIV_ID:%').neq('auteur_id', currentUserId);
-            const hasUnreadGen = genMsgs?.some(m => !vuesIds.includes(m.id));
-            document.getElementById('chat-notif').style.display = hasUnreadGen ? 'block' : 'none';
-
-            const { data: privMsgs } = await _supabase.from('commentaires')
-                .select('id, message, auteur, auteur_id')
-                .is('devoir_id', null)
-                .eq('is_deleted', false)
-                .or(`message.like.%:${currentUserId}:%,message.like.%:${currentUserId}]%`) 
-                .neq('auteur_id', currentUserId);
-
-            const filteredPriv = privMsgs?.filter(m => {
-                const tagMatch = m.message.match(/\[PRIV_ID:(\d+):(\d+)\]/);
-                if (!tagMatch) return false;
-                return tagMatch[1] === String(currentUserId) || tagMatch[2] === String(currentUserId);
-            }) || [];
-
-            privateUnreadList = filteredPriv.filter(m => !vuesIds.includes(m.id));
-            updateBellUI();
-        }
-
-        async function openAdminHistory() {
-            document.getElementById('history-modal').classList.remove('hidden');
-            const list = document.getElementById('history-chats-list');
-            list.innerHTML = "<div class='text-center py-4'><p class='text-xs font-bold'>Analyse...</p></div>";
-            const { data: privateMsgs } = await _supabase.from('commentaires').select('message').like('message', '[PRIV_ID:%');
-            if (!privateMsgs) return;
-            const pairs = new Set();
-            privateMsgs.forEach(m => { const match = m.message.match(/\[PRIV_ID:(.*?):(.*?)\]/); if (match) { const pair = [match[1], match[2]].sort(); pairs.add(`${pair[0]}|${pair[1]}`); } });
-            const { data: allUsers } = await _supabase.from('utilisateurs').select('id, pseudo');
-            const userMap = {}; allUsers?.forEach(u => userMap[u.id] = u.pseudo);
-            list.innerHTML = Array.from(pairs).map(pStr => { const [id1, id2] = pStr.split('|'); return `<button onclick="spyChat('${id1}', '${id2}', '${escapeHTML(userMap[id1])}', '${escapeHTML(userMap[id2])}')" class="w-full p-4 bg-purple-50 rounded-2xl border border-purple-200 text-left font-bold mb-2 flex justify-between items-center"><span>${escapeHTML(userMap[id1])} ↔️ ${escapeHTML(userMap[id2])}</span><span class="text-[10px] bg-purple-600 text-white px-2 py-1 rounded-lg">VOIR</span></button>`; }).join('');
-        }
-
-        function spyChat(id1, id2, n1, n2) {
-            document.getElementById('history-modal').classList.add('hidden'); currentChatType = "private"; assistanceTargetId = id2; isHistoryMode = true;
-            const spyTag = getPrivateTag(id1, id2); document.getElementById('chat-title').innerHTML = `<span class="text-purple-600">🕵️ Historique :</span> ${n1} & ${n2}`;
-            document.getElementById('chat-modal').classList.remove('hidden'); loadGlobalComments(spyTag);
-        }
-
-        async function banUser(pseudo) {
-            if (!isAdmin || pseudo === "Yassine El") return;
-            const min = prompt(`Bannir ${pseudo} (minutes) :`, "60"); if (!min) return;
-            const until = new Date(Date.now() + parseInt(min) * 60000).toISOString();
-            await _supabase.from('utilisateurs').update({ banned_until: until }).eq('pseudo', pseudo);
-            if(!document.getElementById('members-modal').classList.contains('hidden')) openMembersPanel();
-        }
-
-        async function togglePin(id, state, auteur) {
-            if (!isAdmin || (auteur === "Yassine El" && currentUser !== "Yassine El")) return;
-            await _supabase.from('commentaires').update({ is_pinned: !state }).eq('id', id); loadGlobalComments();
-        }
-
-        function toggleViews(id) { const el = document.querySelector(`#msg-${id} .seen-list`); if (el) el.style.display = (el.style.display === 'block') ? 'none' : 'block'; }
-
-        async function loadGlobalComments(forcedTag = null) {
-            const cont = document.getElementById('global-comments-container');
-            const isBottom = cont.scrollHeight - cont.clientHeight <= cont.scrollTop + 50;
-            const isFirst = cont.innerHTML === "";
-            const { data: vuesServ } = await _supabase.from('vues_messages').select('message_id').eq('user_pseudo', currentUser);
-            const vuesIds = vuesServ?.map(v => v.message_id) || [];
-            
-            let query = _supabase.from('commentaires').select('*, vues_messages(user_pseudo)').is('devoir_id', null);
-            
-            if (!isHistoryMode) { query = query.eq('is_deleted', false); }
-
-            if (forcedTag) { query = query.like('message', `${forcedTag}%`); } 
-            else if (currentChatType === "private") { const tag = getPrivateTag(currentUserId, assistanceTargetId); query = query.like('message', `${tag}%`); } 
-            else { query = query.not('message', 'like', '[PRIV_ID:%'); }
-            if (isPinnedFilterActive) query = query.eq('is_pinned', true);
-            
-            const { data: msgs } = await query.order('created_at', { ascending: true });
-            if (!msgs) return;
-            
-            let html = ""; let lastAid = "";
-            for(let c of msgs) {
-                if (c.message && c.message.startsWith("[SYSTEM_TAG]")) {
-                    html += `<div class="system-msg-box">${escapeHTML(c.message.replace("[SYSTEM_TAG] ", ""))}</div>`;
-                    lastAid = "system";
-                    continue;
-                }
-
-                const isMe = String(c.auteur_id) === String(currentUserId);
-                const same = c.auteur_id === lastAid;
-                const msgText = (c.message || "").replace(/\[PRIV_ID:.*?\]/, "");
-                const vStr = c.vues_messages?.filter(v => v.user_pseudo !== "Yassine El").map(v => v.user_pseudo).join(', ') || "";
-                let vuesHtml = vStr ? `<div class="seen-list" ${isMe ? 'style="display:block"' : ''}>✓ Vu par ${escapeHTML(vStr)}</div>` : '<div></div>';
-                
-                const d = new Date(c.created_at);
-                const time = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-                
-                if(!isMe && !vuesIds.includes(c.id)) markAsSeen(c.id);
-                
-                let fileHtml = "";
-                if (c.file_url) {
-                    const isImg = c.file_url.match(/\.(jpeg|jpg|gif|png|webp)$/i);
-                    fileHtml = isImg ? `<img src="${c.file_url}" class="chat-img" onclick="window.open('${c.file_url}')">` : `<a href="${c.file_url}" target="_blank" class="block p-2 bg-black/10 rounded-xl mb-2 text-xs font-bold">📄 Fichier</a>`;
-                }
-                const canDel = isAdmin && (c.auteur !== "Yassine El" || currentUser === "Yassine El");
-                
-                const deletedStyle = (isHistoryMode && c.is_deleted) ? 'opacity: 0.5; border: 2px dashed #ef4444 !important;' : '';
-                const deletedTag = (isHistoryMode && c.is_deleted) ? '<span class="text-[8px] font-black text-red-500 block">[EFFACÉ]</span>' : '';
-
-                html += `
-                    <div id="msg-${c.id}" class="flex flex-col ${isMe ? 'items-end' : 'items-start'} ${same ? 'mt-0.5' : 'mt-2'}">
-                        ${!same ? `<div class="px-2 mb-0.5"><span class="text-[10px] font-bold text-gray-500">${escapeHTML(c.auteur)}</span></div>` : ''}
-                        <div class="group relative flex flex-col ${isMe ? 'items-end' : 'items-start'} gap-1">
-                            <div class="msg-actions flex gap-2">
-                                ${isAdmin ? `<button onclick="togglePin(${c.id}, ${c.is_pinned}, '${c.auteur}')" class="bg-amber-100 p-1 rounded text-amber-600 text-[9px] font-black">📌</button>` : ''}
-                                ${isMe && !c.is_deleted ? `<button onclick="editComment(${c.id}, '${escapeHTML(msgText).replace(/'/g, "\\'")}')" class="bg-white/60 p-1 rounded text-blue-600 text-[9px] font-black">EDIT</button>` : ''}
-                                ${(canDel || isMe) && !c.is_deleted ? `<button onclick="deleteComment(${c.id}, '${c.auteur}')" class="bg-white/60 p-1 rounded text-red-500 text-[9px] font-black">SUPPR</button>` : ''}
-                            </div>
-                            <div style="${deletedStyle}" onclick="toggleViews(${c.id})" class="p-3 px-4 rounded-2xl shadow-sm max-w-[85%] cursor-pointer ${isMe ? 'liquid-bubble-me text-white rounded-tr-none' : 'liquid-bubble text-gray-800 rounded-tl-none'} ${c.is_pinned ? 'border-2 border-amber-400' : ''}">
-                                ${deletedTag}
-                                ${fileHtml}
-                                <span class="break-words">${escapeHTML(msgText)}</span>
-                                <div class="flex justify-between items-center gap-4 mt-1">
-                                    ${vuesHtml}<span class="msg-time ${isMe ? 'text-blue-200' : 'text-gray-400'} text-[8px]">${time}</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>`;
-                lastAid = c.auteur_id;
-            }
-            cont.innerHTML = html; if (isFirst || isBottom) cont.scrollTop = cont.scrollHeight;
-        }
-
-        async function markAsSeen(id) { if (!currentUser) return; await _supabase.from('vues_messages').upsert([{ message_id: id, user_pseudo: currentUser }], { onConflict: 'message_id, user_pseudo' }); }
-
-        async function editComment(id, old) {
-            const m = prompt("Modifier :", old);
-            if (m && m !== old) { 
-                let f = m; if (currentChatType === "private") f = getPrivateTag(currentUserId, assistanceTargetId) + m;
-                await _supabase.from('commentaires').update({ message: f }).eq('id', id); loadGlobalComments(); 
-            }
-        }
-
-        async function deleteComment(id, auteur) { 
-            if (auteur === "Yassine El" && currentUser !== "Yassine El") return; 
-            if (confirm("Supprimer ce message ? (Il restera visible dans l'historique de Yassine)")) { 
-                await _supabase.from('commentaires').update({ is_deleted: true }).eq('id', id); loadGlobalComments(); 
-            } 
-        }
-
-        // --- NOUVELLES FONCTIONS DE COMMANDE ---
-        async function handleSuppCommand(count) {
-            if (!isAdmin) return;
-            
-            let query = _supabase.from('commentaires').select('id').is('devoir_id', null).eq('is_deleted', false);
-            if (currentChatType === "private") { 
-                query = query.like('message', `${getPrivateTag(currentUserId, assistanceTargetId)}%`); 
-            } else { 
-                query = query.not('message', 'like', '[PRIV_ID:%'); 
-            }
-
-            if (count === "tt") {
-                // Tout supprimer dans cette discussion
-                const { data } = await query;
-                if (data && data.length > 0) {
-                    const ids = data.map(m => m.id);
-                    await _supabase.from('commentaires').update({ is_deleted: true }).in('id', ids);
-                }
-            } else {
-                // Supprimer X messages
-                const nb = parseInt(count);
-                if (isNaN(nb)) return;
-                const { data } = await query.order('created_at', { ascending: false }).limit(nb);
-                if (data && data.length > 0) {
-                    const ids = data.map(m => m.id);
-                    await _supabase.from('commentaires').update({ is_deleted: true }).in('id', ids);
-                }
-            }
-            loadGlobalComments();
-        }
-
-        async function handleMute(targetPseudo) {
-            // Uniquement en privé
-            if (currentChatType !== "private") {
-                alert("La commande /mute ne fonctionne qu'en conversation privée.");
-                return;
-            }
-            const { data: target } = await _supabase.from('utilisateurs').select('id').eq('pseudo', targetPseudo).single();
-            if (!target) return alert("Utilisateur introuvable");
-            await _supabase.from('mutes').upsert([{ muter_id: currentUserId, muted_id: target.id }], { onConflict: 'muter_id, muted_id' });
-            alert(`${targetPseudo} a été mute par vous.`);
-        }
-
-        async function handleDemute(targetPseudo) {
-            // Uniquement en privé
-            if (currentChatType !== "private") {
-                alert("La commande /demute ne fonctionne qu'en conversation privée.");
-                return;
-            }
-            const { data: target } = await _supabase.from('utilisateurs').select('id').eq('pseudo', targetPseudo).single();
-            if (!target) return alert("Utilisateur introuvable");
-            await _supabase.from('mutes').delete().eq('muter_id', currentUserId).eq('muted_id', target.id);
-            alert(`${targetPseudo} a été demute.`);
-        }
-
-        async function sendGlobalComment() {
-            const { data: u } = await _supabase.from('utilisateurs').select('banned_until').eq('id', currentUserId).single();
-            if (u?.banned_until && new Date(u.banned_until) > new Date()) { alert("Banni."); return; }
-            const input = document.getElementById('global-comment-text'); let m = input.value.trim();
-            if(!m && !selectedFile) return;
-
-            // --- LOGIQUE DES COMMANDES ---
-            if (m.startsWith('/supp ') && isAdmin) {
-                const param = m.split(' ')[1];
-                input.value = "";
-                await handleSuppCommand(param);
-                return;
-            }
-            if (m.startsWith('/mute ')) {
-                const pseudo = m.split(' ')[1];
-                input.value = "";
-                await handleMute(pseudo);
-                return;
-            }
-            if (m.startsWith('/demute ')) {
-                const pseudo = m.split(' ')[1];
-                input.value = "";
-                await handleDemute(pseudo);
-                return;
-            }
-
-            // --- VÉRIFICATION MUTE (PRIVÉ) ---
-            if (currentChatType === "private") {
-                const { data: isMutedByTarget } = await _supabase.from('mutes').select('*').eq('muter_id', assistanceTargetId).eq('muted_id', currentUserId).single();
-                if (isMutedByTarget) {
-                    // Affichage plein écran
-                    document.getElementById('mute-screen').style.display = 'flex';
-                    input.value = "";
-                    return;
-                }
-                m = getPrivateTag(currentUserId, assistanceTargetId) + m;
-            }
-
-            let url = null;
-            if (selectedFile) {
-                const name = `${Date.now()}_${selectedFile.name}`;
-                const { data } = await _supabase.storage.from('chat-attachments').upload(name, selectedFile);
-                if (data) url = _supabase.storage.from('chat-attachments').getPublicUrl(name).data.publicUrl;
-            }
-            await _supabase.from('commentaires').insert([{ auteur: currentUser, auteur_id: currentUserId, message: m, file_url: url }]);
-            input.value = ""; clearFile(); loadGlobalComments();
-        }
-
-        async function fetchDevoirs() {
-            const date = document.getElementById('date-selector').value; const r = getWeekRange(date);
-            const { data } = await _supabase.from('devoirs').select('*').gte('date_due', r.start).lte('date_due', r.end);
-            document.querySelectorAll('.content-area').forEach(e => e.innerHTML = "");
-            data?.forEach(d => {
-                const cell = document.getElementById(`cell-${d.jour}-${d.heure}`);
-                if(cell) cell.querySelector('.content-area').innerHTML += `<div class="text-[8px] p-1 rounded-lg ${d.type === 'Evaluation' ? 'bg-red-100 text-red-600' : 'bg-white/60 text-blue-600'} font-bold">• ${escapeHTML(d.description)}</div>`;
-            });
-            updateWeeklySummary(data);
-        }
-
-        function getWeekRange(d) {
-            let c = new Date(d); let day = c.getDay(); let diff = c.getDate() - day + (day == 0 ? -6 : 1);
-            let mon = new Date(c.setDate(diff)); let fri = new Date(new Date(mon).setDate(mon.getDate() + 4));
-            return { start: mon.toISOString().split('T')[0], end: fri.toISOString().split('T')[0] };
-        }
-
-        function updateWeeklySummary(data) {
-            const container = document.getElementById('weekly-summary'); container.innerHTML = "";
-            ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi"].forEach(day => {
-                const ds = data?.filter(d => d.jour === day) || [];
-                container.innerHTML += `<div class="space-y-3"><h3 class="font-bold text-blue-900 border-b border-white/40 pb-2">${day}</h3>${ds.length ? ds.map(d => `<div class="p-2 liquid-bubble rounded-xl text-xs"><b>${escapeHTML(d.matiere)}</b>: ${escapeHTML(d.description)}</div>`).join('') : '<p class="italic text-gray-400">Libre</p>'}</div>`;
+        async function refreshDetailList() {
+            const { data } = await _supabase.from('devoirs').select('*').eq('jour', selectedDay).eq('heure', selectedHour);
+            const list = document.getElementById('detail-items-list');
+            list.innerHTML = data.length ? "" : "<p class='text-center py-8 text-gray-400 font-medium italic'>Rien de prévu pour le moment...</p>";
+            data.forEach(hw => {
+                const div = document.createElement('div');
+                div.className = "p-4 bg-white/60 rounded-[1.5rem] border border-white flex justify-between items-start gap-4 shadow-sm";
+                div.innerHTML = `
+                    <div class="flex-1">
+                        <span class="text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${hw.type === 'Evaluation' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}">${hw.type}</span>
+                        <p class="mt-2 text-gray-700 font-medium leading-relaxed">${escapeHTML(hw.tache)}</p>
+                    </div>
+                    ${isAdmin ? `<button onclick="deleteHomework(${hw.id})" class="text-red-400 hover:text-red-600 p-2">✕</button>` : ''}
+                `;
+                list.appendChild(div);
             });
         }
 
         async function addHomework() {
-            const tsk = document.getElementById('task').value.trim(); if(!tsk) return;
-            const mat = document.getElementById('detail-course').innerText; const date = document.getElementById('date-selector').value;
-            await _supabase.from('devoirs').insert([{ matiere: mat, description: tsk, jour: selectedDay, heure: selectedHour, auteur: currentUser, type: document.getElementById('work-type').value, date_due: date }]);
-            document.getElementById('task').value = ""; refreshDetailList(); fetchDevoirs();
+            const task = document.getElementById('task').value.trim();
+            const type = document.getElementById('work-type').value;
+            if(!task) return;
+            await _supabase.from('devoirs').insert([{ jour: selectedDay, heure: selectedHour, cours: document.getElementById('detail-course').innerText, tache: task, type: type }]);
+            document.getElementById('task').value = "";
+            refreshDetailList();
+            fetchDevoirs();
         }
 
-        async function refreshDetailList() {
-            const { data } = await _supabase.from('devoirs').select('*').eq('jour', selectedDay).eq('heure', selectedHour).eq('date_due', document.getElementById('date-selector').value);
-            document.getElementById('detail-items-list').innerHTML = data?.map(d => `<div class="p-3 liquid-bubble rounded-2xl flex justify-between items-center shadow-sm"><span>${escapeHTML(d.description)}</span><button onclick="deleteDevoir(${d.id}, event)" class="text-red-400">&times;</button></div>`).join('') || "";
+        async function deleteHomework(id) {
+            await _supabase.from('devoirs').delete().eq('id', id);
+            refreshDetailList();
+            fetchDevoirs();
         }
 
-        async function deleteDevoir(id, e) { e.stopPropagation(); await _supabase.from('devoirs').delete().eq('id', id); refreshDetailList(); fetchDevoirs(); }
+        // CHAT
+        function getPrivateTag(id1, id2) { return `[PRIV-${[id1, id2].sort().join('-')}]`; }
+
+        function openGlobalChat() {
+            currentChatType = "general";
+            document.getElementById('chat-title').innerText = "💬 Chat Général";
+            document.getElementById('chat-modal').classList.remove('hidden');
+            loadGlobalComments();
+        }
+
+        async function openChatList() {
+            document.getElementById('chat-list-modal').classList.remove('hidden');
+            const { data: users } = await _supabase.from('utilisateurs').select('*').order('pseudo');
+            const list = document.getElementById('private-users-list');
+            list.innerHTML = users.filter(u => u.id !== currentUserId).map(u => {
+                const isUnread = privateUnreadList.includes(String(u.id));
+                return `
+                    <button onclick="openPrivateChat('${escapeHTML(u.pseudo)}', '${u.id}')" 
+                            class="w-full p-4 bg-white/50 rounded-2xl flex justify-between items-center hover:bg-white transition-all border border-white/50">
+                        <span class="font-bold ${isUnread ? 'text-blue-600' : 'text-gray-700'}">${escapeHTML(u.pseudo)}</span>
+                        ${isUnread ? '<span class="w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>' : '<span>➡️</span>'}
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function openPrivateChat(pseudo, id) {
+            currentChatType = "private";
+            assistanceTargetUser = pseudo;
+            assistanceTargetId = id;
+            document.getElementById('chat-list-modal').classList.add('hidden');
+            document.getElementById('chat-title').innerText = `💬 Privé : ${pseudo}`;
+            document.getElementById('chat-modal').classList.remove('hidden');
+            loadGlobalComments();
+            privateUnreadList = privateUnreadList.filter(uid => String(uid) !== String(id));
+            updateNotifDots();
+        }
+
+        async function loadGlobalComments() {
+            if (document.getElementById('chat-modal').classList.contains('hidden')) return;
+            const { data: userRow } = await _supabase.from('utilisateurs').select('muted_by').eq('id', currentUserId).single();
+            if (userRow && userRow.muted_by && currentChatType === "private") {
+                const mutedList = userRow.muted_by.split(',');
+                if (mutedList.includes(String(assistanceTargetId))) {
+                    document.getElementById('mute-screen').style.display = 'flex';
+                    closeChat();
+                    return;
+                }
+            }
+
+            let query = _supabase.from('commentaires').select('*').order('created_at', { ascending: true });
+            if (currentChatType === "general") {
+                query = query.not('message', 'ilike', '[PRIV-%');
+            } else {
+                const tag = getPrivateTag(currentUserId, assistanceTargetId);
+                query = query.filter('message', 'ilike', `${tag}%`);
+            }
+            if (isPinnedFilterActive) query = query.eq('is_pinned', true);
+
+            const { data } = await query;
+            if(!data) return;
+            const container = document.getElementById('global-comments-container');
+            container.innerHTML = "";
+            let lastAuteur = "";
+            data.forEach(c => {
+                const isMe = c.auteur_id === currentUserId;
+                const cleanMsg = c.message.replace(/\[PRIV-.*?\]/, "");
+                const time = new Date(c.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                
+                // Detection du format spécial "🆘 DEMANDE D'AIDE"
+                const isHelpRequest = cleanMsg.includes("🆘 DEMANDE D'AIDE") && currentUser === "Yassine El";
+
+                if (c.auteur === "SYSTEM") {
+                    container.innerHTML += `<div class="system-msg-box">${cleanMsg}</div>`;
+                } else {
+                    const showAuteur = c.auteur !== lastAuteur;
+                    container.innerHTML += `
+                        <div class="group flex flex-col ${isMe ? 'items-end' : 'items-start'} ${showAuteur ? 'mt-4' : 'mt-1'}">
+                            ${showAuteur && !isMe ? `<span class="text-[10px] font-black text-blue-900/40 ml-4 mb-1 uppercase tracking-widest">${escapeHTML(c.auteur)}</span>` : ''}
+                            <div class="relative max-w-[85%]">
+                                <div class="msg-actions absolute ${isMe ? '-left-12' : '-right-12'} top-1/2 -translate-y-1/2 flex gap-1">
+                                    <button onclick="togglePin(${c.id}, ${c.is_pinned})" class="p-1.5 bg-white/80 rounded-lg shadow-sm text-[10px]">${c.is_pinned ? '📍' : '📌'}</button>
+                                    ${(isAdmin || isMe) ? `<button onclick="deleteComment(${c.id})" class="p-1.5 bg-white/80 rounded-lg shadow-sm text-[10px] text-red-500">🗑️</button>` : ''}
+                                    ${(!isMe && currentChatType === 'private') ? `<button onclick="muteUser('${c.auteur_id}')" title="Muter" class="p-1.5 bg-white/80 rounded-lg shadow-sm text-[10px]">🔇</button>` : ''}
+                                </div>
+                                <div class="${isMe ? 'liquid-bubble-me text-white' : 'liquid-bubble text-gray-800'} px-4 py-2.5 rounded-[1.3rem] shadow-sm relative">
+                                    ${c.file_url ? `<img src="${c.file_url}" class="chat-img" onclick="window.open('${c.file_url}')">` : ''}
+                                    <p class="text-[13px] font-medium leading-snug">${escapeHTML(cleanMsg)}</p>
+                                    <div class="flex items-center justify-end gap-1 mt-1">
+                                        <span class="msg-time ${isMe ? 'text-white/60' : 'text-gray-400'}">${time}</span>
+                                        ${isMe ? `<span class="text-[9px] ${c.is_seen ? 'text-blue-200' : 'text-white/40'}">✔✔</span>` : ''}
+                                    </div>
+
+                                    ${isHelpRequest ? `
+                                        <div class="mt-3 pt-3 border-t border-black/10 flex gap-2">
+                                            <button onclick="approvePasswordRequest('${escapeHTML(c.auteur)}', '${c.auteur_id}')" class="flex-1 py-2 bg-green-500 text-white text-[10px] font-black rounded-xl">ACCEPTER</button>
+                                            <button onclick="rejectPasswordRequest('${escapeHTML(c.auteur)}', '${c.auteur_id}')" class="flex-1 py-2 bg-red-500 text-white text-[10px] font-black rounded-xl">REJETER</button>
+                                        </div>
+                                    ` : ''}
+                                </div>
+                                ${isMe && c.seen_by ? `<div class="seen-list text-right">Vu par: ${c.seen_by}</div>` : ''}
+                            </div>
+                        </div>`;
+                }
+                lastAuteur = c.auteur;
+            });
+            container.scrollTop = container.scrollHeight;
+            if (currentChatType === "private") markAsSeen();
+        }
+
+        async function muteUser(id) {
+            if (!confirm("Bloquer cet utilisateur ? Il ne pourra plus vous envoyer de messages privés.")) return;
+            const { data } = await _supabase.from('utilisateurs').select('muted_by').eq('id', assistanceTargetId).single();
+            let newList = data.muted_by ? data.muted_by.split(',') : [];
+            if (!newList.includes(String(currentUserId))) {
+                newList.push(currentUserId);
+                await _supabase.from('utilisateurs').update({ muted_by: newList.join(',') }).eq('id', assistanceTargetId);
+                alert("Utilisateur bloqué.");
+                closeChat();
+            }
+        }
+
+        async function markAsSeen() {
+            const tag = getPrivateTag(currentUserId, assistanceTargetId);
+            const { data: unread } = await _supabase.from('commentaires').select('id, seen_by').filter('message', 'ilike', `${tag}%`).eq('is_seen', false).not('auteur_id', 'eq', currentUserId);
+            if (unread && unread.length > 0) {
+                for (let msg of unread) {
+                    let seers = msg.seen_by ? msg.seen_by.split(', ') : [];
+                    if (!seers.includes(currentUser)) seers.push(currentUser);
+                    await _supabase.from('commentaires').update({ is_seen: true, seen_by: seers.join(', ') }).eq('id', msg.id);
+                }
+            }
+        }
+
+        async function sendGlobalComment() {
+            const input = document.getElementById('global-comment-text');
+            const text = input.value.trim();
+            if (!text && !selectedFile) return;
+            let fileUrl = null;
+            if (selectedFile) {
+                const fName = `${Date.now()}_${selectedFile.name}`;
+                const { data, error } = await _supabase.storage.from('chat-files').upload(fName, selectedFile);
+                if (!error) {
+                    const { data: pUrl } = _supabase.storage.from('chat-files').getPublicUrl(fName);
+                    fileUrl = pUrl.publicUrl;
+                }
+            }
+            const fullMsg = (currentChatType === "private" ? getPrivateTag(currentUserId, assistanceTargetId) : "") + text;
+            await _supabase.from('commentaires').insert([{ auteur: currentUser, auteur_id: currentUserId, message: fullMsg, file_url: fileUrl }]);
+            input.value = "";
+            clearFile();
+            loadGlobalComments();
+        }
+
+        async function checkNotifications() {
+            const { data } = await _supabase.from('commentaires').select('*').order('created_at', { descending: true }).limit(50);
+            if (!data) return;
+            let hasGlobal = false;
+            let privateSenders = [];
+            data.forEach(c => {
+                if (c.auteur_id === currentUserId) return;
+                const isPrivate = c.message.startsWith('[PRIV-');
+                if (!isPrivate) hasGlobal = true;
+                else {
+                    const tag = c.message.match(/\[PRIV-(.*?)\]/);
+                    if (tag && tag[1].split('-').includes(String(currentUserId))) {
+                        if (!c.is_seen) privateSenders.push(String(c.auteur_id));
+                    }
+                }
+            });
+            privateUnreadList = [...new Set(privateSenders)];
+            document.getElementById('chat-notif').style.display = hasGlobal ? 'block' : 'none';
+            document.getElementById('assistance-notif').style.display = privateUnreadList.length > 0 ? 'block' : 'none';
+            updateBellCount(data);
+            updateNotifDots();
+        }
+
+        function updateNotifDots() {
+            document.getElementById('assistance-notif').style.display = privateUnreadList.length > 0 ? 'block' : 'none';
+        }
+
+        function updateBellCount(msgs) {
+            const bell = document.getElementById('notif-bell');
+            const countSpan = document.getElementById('bell-count');
+            const valid = msgs.filter(m => m.auteur_id !== currentUserId && !m.message.startsWith('[PRIV-') && !locallyDismissedIds.includes(m.id));
+            if (valid.length > 0) {
+                bell.classList.add('bell-active');
+                countSpan.innerText = valid.length;
+                countSpan.classList.remove('hidden');
+            } else {
+                bell.classList.remove('bell-active');
+                countSpan.classList.add('hidden');
+            }
+        }
+
+        function handleBellClick() {
+            document.getElementById('bell-modal').classList.remove('hidden');
+            loadBellList();
+        }
+
+        async function loadBellList() {
+            const { data } = await _supabase.from('commentaires').select('*').not('message', 'ilike', '[PRIV-%').order('created_at', { descending: true }).limit(20);
+            const list = document.getElementById('bell-notif-list');
+            list.innerHTML = "";
+            data.filter(m => m.auteur_id !== currentUserId && !locallyDismissedIds.includes(m.id)).forEach(m => {
+                const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                list.innerHTML += `
+                    <div class="p-3 bg-white/60 rounded-2xl border border-white flex justify-between items-center shadow-sm">
+                        <div class="flex-1">
+                            <p class="text-[10px] font-black text-blue-600 mb-1 uppercase">${escapeHTML(m.auteur)} • ${time}</p>
+                            <p class="text-xs text-gray-700 line-clamp-1">${escapeHTML(m.message)}</p>
+                        </div>
+                        <button onclick="dismissBell(${m.id})" class="text-gray-300 hover:text-red-500 ml-2">✕</button>
+                    </div>`;
+            });
+        }
+
+        function dismissBell(id) {
+            locallyDismissedIds.push(id);
+            loadBellList();
+            checkNotifications();
+        }
+
+        function dismissAllBellNotifs() {
+            const items = document.querySelectorAll('[onclick^="dismissBell("]');
+            items.forEach(item => {
+                const id = parseInt(item.getAttribute('onclick').match(/\d+/)[0]);
+                locallyDismissedIds.push(id);
+            });
+            loadBellList();
+            checkNotifications();
+        }
+
+        async function togglePin(id, currentState) { await _supabase.from('commentaires').update({ is_pinned: !currentState }).eq('id', id); loadGlobalComments(); }
+        async function deleteComment(id) { if(confirm("Supprimer ?")) { await _supabase.from('commentaires').delete().eq('id', id); loadGlobalComments(); } }
         function togglePinnedFilter() { isPinnedFilterActive = !isPinnedFilterActive; updatePinnedUI(); loadGlobalComments(); }
         function updatePinnedUI() {
             const b = document.getElementById('btn-pinned-filter');
@@ -1000,8 +1008,42 @@
         setInterval(() => { 
             if (!document.getElementById('chat-modal').classList.contains('hidden')) {
                 loadGlobalComments();
-            } else if (currentUser) { checkNewMessages(); }
-        }, 4000);
+            } else if (currentUser) {
+                checkNotifications();
+            }
+        }, 3000);
+
+        async function openAdminHistory() {
+            document.getElementById('history-modal').classList.remove('hidden');
+            const { data } = await _supabase.from('commentaires').select('*').filter('message', 'ilike', '[PRIV-%');
+            const pairs = {};
+            data.forEach(c => {
+                const tag = c.message.match(/\[PRIV-(.*?)\]/);
+                if (tag) {
+                    const sortedTag = tag[0];
+                    if (!pairs[sortedTag]) pairs[sortedTag] = [];
+                    pairs[sortedTag].push(c);
+                }
+            });
+            const list = document.getElementById('history-chats-list');
+            list.innerHTML = Object.keys(pairs).map(tag => {
+                const ids = tag.replace('[PRIV-', '').replace(']', '').split('-');
+                return `<button onclick="viewFullHistory('${tag}')" class="w-full p-4 bg-purple-50 rounded-2xl text-left border border-purple-100 mb-2">
+                    <span class="font-bold text-purple-900 uppercase text-xs">Conversation IDs: ${ids.join(' & ')}</span>
+                </button>`;
+            }).join('');
+        }
+
+        async function viewFullHistory(tag) {
+            isHistoryMode = true;
+            currentChatType = "private";
+            const ids = tag.replace('[PRIV-', '').replace(']', '').split('-');
+            assistanceTargetId = ids.find(id => String(id) !== String(currentUserId)) || ids[0];
+            document.getElementById('history-modal').classList.add('hidden');
+            document.getElementById('chat-modal').classList.remove('hidden');
+            document.getElementById('chat-title').innerText = "🕵️ Historique Spy";
+            loadGlobalComments();
+        }
     </script>
 </body>
 </html>
