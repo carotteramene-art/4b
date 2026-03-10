@@ -129,9 +129,29 @@
             padding: 4px 12px;
             height: 20px;
         }
+
+        /* NOUVEAU: Écran plein écran pour le Mute */
+        #mute-screen {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: #ef4444;
+            color: white;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
     </style>
 </head>
 <body class="p-4 md:p-8">
+
+    <div id="mute-screen">
+        <h1 class="text-6xl md:text-9xl font-black mb-8">TU ES MUTE</h1>
+        <p class="text-xl font-bold opacity-80 mb-10">Cet utilisateur t'a bloqué, tu ne peux pas lui écrire.</p>
+        <button onclick="document.getElementById('mute-screen').style.display='none'" class="px-8 py-4 bg-white text-red-600 rounded-2xl font-black shadow-2xl">RETOUR</button>
+    </div>
 
     <div id="login-screen" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-blue-50/60 backdrop-blur-xl">
         <div class="glass-card p-10 rounded-[2.5rem] text-center max-w-sm w-full modal-animate border-white/50">
@@ -637,6 +657,13 @@
         }
 
         async function openPrivateChat(targetPseudo, targetId) {
+            // NOUVEAU: Vérifier si la cible nous a muté AVANT d'ouvrir
+            const { data: isMutedByTarget } = await _supabase.from('mutes').select('*').eq('muter_id', targetId).eq('muted_id', currentUserId).single();
+            if (isMutedByTarget) {
+                document.getElementById('mute-screen').style.display = 'flex';
+                return;
+            }
+
             currentChatType = "private"; assistanceTargetUser = targetPseudo; assistanceTargetId = targetId; isPinnedFilterActive = false; isHistoryMode = false; updatePinnedUI();
             document.getElementById('chat-list-modal').classList.add('hidden');
             document.getElementById('chat-title').innerHTML = `${escapeHTML(targetPseudo)}`;
@@ -822,8 +849,6 @@
         // --- NOUVELLES FONCTIONS DE COMMANDE ---
         async function handleSuppCommand(count) {
             if (!isAdmin) return;
-            const nb = parseInt(count);
-            if (isNaN(nb)) return;
             
             let query = _supabase.from('commentaires').select('id').is('devoir_id', null).eq('is_deleted', false);
             if (currentChatType === "private") { 
@@ -831,23 +856,45 @@
             } else { 
                 query = query.not('message', 'like', '[PRIV_ID:%'); 
             }
-            
-            const { data } = await query.order('created_at', { ascending: false }).limit(nb);
-            if (data && data.length > 0) {
-                const ids = data.map(m => m.id);
-                await _supabase.from('commentaires').update({ is_deleted: true }).in('id', ids);
-                loadGlobalComments();
+
+            if (count === "tt") {
+                // Tout supprimer dans cette discussion
+                const { data } = await query;
+                if (data && data.length > 0) {
+                    const ids = data.map(m => m.id);
+                    await _supabase.from('commentaires').update({ is_deleted: true }).in('id', ids);
+                }
+            } else {
+                // Supprimer X messages
+                const nb = parseInt(count);
+                if (isNaN(nb)) return;
+                const { data } = await query.order('created_at', { ascending: false }).limit(nb);
+                if (data && data.length > 0) {
+                    const ids = data.map(m => m.id);
+                    await _supabase.from('commentaires').update({ is_deleted: true }).in('id', ids);
+                }
             }
+            loadGlobalComments();
         }
 
         async function handleMute(targetPseudo) {
+            // Uniquement en privé
+            if (currentChatType !== "private") {
+                alert("La commande /mute ne fonctionne qu'en conversation privée.");
+                return;
+            }
             const { data: target } = await _supabase.from('utilisateurs').select('id').eq('pseudo', targetPseudo).single();
             if (!target) return alert("Utilisateur introuvable");
-            await _supabase.from('mutes').upsert([{ muter_id: currentUserId, muted_id: target.id }]);
+            await _supabase.from('mutes').upsert([{ muter_id: currentUserId, muted_id: target.id }], { onConflict: 'muter_id, muted_id' });
             alert(`${targetPseudo} a été mute par vous.`);
         }
 
         async function handleDemute(targetPseudo) {
+            // Uniquement en privé
+            if (currentChatType !== "private") {
+                alert("La commande /demute ne fonctionne qu'en conversation privée.");
+                return;
+            }
             const { data: target } = await _supabase.from('utilisateurs').select('id').eq('pseudo', targetPseudo).single();
             if (!target) return alert("Utilisateur introuvable");
             await _supabase.from('mutes').delete().eq('muter_id', currentUserId).eq('muted_id', target.id);
@@ -862,9 +909,9 @@
 
             // --- LOGIQUE DES COMMANDES ---
             if (m.startsWith('/supp ') && isAdmin) {
-                const nb = m.split(' ')[1];
+                const param = m.split(' ')[1];
                 input.value = "";
-                await handleSuppCommand(nb);
+                await handleSuppCommand(param);
                 return;
             }
             if (m.startsWith('/mute ')) {
@@ -884,7 +931,8 @@
             if (currentChatType === "private") {
                 const { data: isMutedByTarget } = await _supabase.from('mutes').select('*').eq('muter_id', assistanceTargetId).eq('muted_id', currentUserId).single();
                 if (isMutedByTarget) {
-                    alert("Vous êtes mute par cet utilisateur");
+                    // Affichage plein écran
+                    document.getElementById('mute-screen').style.display = 'flex';
                     input.value = "";
                     return;
                 }
